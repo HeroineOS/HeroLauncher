@@ -1,0 +1,15 @@
+# HeroLauncher: ~/.config/hero/launcher.toml
+#
+# Open it centered:          herolauncher
+# Open it as a menu:         HeroBar's launcher module does this at its button
+# Running it again closes it, so one keyboard shortcut toggles it, e.g. in
+# HeroWM's config:  Super-Space = { action = "run-command", arg = "herolauncher" }
+#
+# Type to search; Up/Down and Enter to start an app; Escape or a click
+# outside closes it. Right-click an app to add it to (or remove it from)
+# the favorites.
+
+favorites = []           # Desktop file names, shown first ("firefox-esr", "foot")
+width = 460              # The panel's size
+height = 540
+terminal = ""            # For terminal apps ("" = $TERMINAL or the first one found)
