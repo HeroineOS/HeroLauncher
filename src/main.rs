@@ -270,11 +270,27 @@ impl heroui::App for Launcher {
 /// `input`, focused once the window shows (type right away).
 fn focused(input: Element<Launcher, Msg>) -> Element<Launcher, Msg> {
     Element::new(move |ctx| {
-        let w = input.build(ctx);
-        let mut w2 = w.clone();
-        fapp::add_timeout3(0.0, move |_| {
-            let _ = w2.take_focus();
-        });
+        let mut w = input.build(ctx);
+        // HeroUI turns FLTK's keyboard navigation off; this one takes focus.
+        w.set_visible_focus();
+        // Once the window shows (sooner, on Wayland), and again in case it
+        // wasn't yet (X11).
+        for delay in [0.0, 0.1, 0.3] {
+            let mut w2 = w.clone();
+            fapp::add_timeout3(delay, move |_| {
+                if fapp::focus().map(|f| f.as_widget_ptr()) != Some(w2.as_widget_ptr()) {
+                    // FLTK ignores focus changes during a grab (X11).
+                    let grab = fapp::grab();
+                    if grab.is_some() {
+                        fapp::set_grab(None::<heroui::fltk::window::Window>);
+                    }
+                    let _ = w2.take_focus();
+                    if let Some(g) = grab {
+                        fapp::set_grab(Some(g));
+                    }
+                }
+            });
+        }
         w
     })
 }
@@ -306,11 +322,15 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
                 let t = heroui::theme::current();
                 let (x, y, w, h) = rect.get();
                 let (x, y) = (g.x() + x, g.y() + y);
-                let r = if heroui::is_transparent() { t.radius.min(14) } else { 0 };
-                draw::set_draw_color(t.border);
-                draw::draw_rounded_rectf(x, y, w, h, r);
-                draw::set_draw_color(t.background);
-                draw::draw_rounded_rectf(x + 1, y + 1, w - 2, h - 2, (r - 1).max(0));
+                // Only on full redraws: when just a child changed, it
+                // repaints itself over what's there.
+                if g.damage_type() != heroui::fltk::enums::Damage::Child {
+                    let r = if heroui::is_transparent() { t.radius.min(14) } else { 0 };
+                    draw::set_draw_color(t.border);
+                    draw::draw_rounded_rectf(x, y, w, h, r);
+                    draw::set_draw_color(t.background);
+                    draw::draw_rounded_rectf(x + 1, y + 1, w - 2, h - 2, (r - 1).max(0));
+                }
                 g.draw_children();
             });
         }
@@ -338,6 +358,16 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
                     emit(Msg::Step(1));
                     true
                 }
+                Key::Enter | Key::KPEnter if ev == Event::Shortcut => {
+                    emit(Msg::Submit);
+                    true
+                }
+                // During a grab (X11) FLTK gives keys to the grabbing
+                // window, not the focused field: pass them on.
+                _ if ev == Event::Shortcut && fapp::grab().is_some() => match fapp::focus() {
+                    Some(mut f) if f.as_widget_ptr() != g.as_widget_ptr() => f.handle_event(Event::KeyDown),
+                    _ => false,
+                },
                 _ => false,
             },
             _ => false,

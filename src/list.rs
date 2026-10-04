@@ -233,8 +233,12 @@ pub fn view() -> Element<Launcher, Msg> {
                             (hit, hit.and_then(|i| s.layout(f.w()).get(i).copied()))
                         };
                         if app::event_mouse_button() == MouseButton::Right {
-                            if let (Some(i), Some(rect)) = (hit, rect) {
+                            if let (Some(i), Some(mut rect)) = (hit, rect) {
                                 let app_i = v.borrow().lines[i].shown.app();
+                                // A row's menu drops down at the pointer.
+                                if matches!(v.borrow().lines[i].shown, Shown::Row(_)) {
+                                    rect = (p.0 - 1, rect.1, 2, rect.3);
+                                }
                                 if let Some(a) = app_i {
                                     emit(Msg::OpenMenuAt(a, rect));
                                 }
@@ -289,7 +293,7 @@ pub fn view() -> Element<Launcher, Msg> {
                     Some(a) => Line {
                         shown,
                         name: a.name.clone(),
-                        detail: if a.generic.is_empty() { a.comment.clone() } else { a.generic.clone() },
+                        detail: [&a.generic, &a.comment].into_iter().find(|d| !d.is_empty() && **d != a.name).cloned().unwrap_or_default(),
                         icon: a.icon.clone(),
                     },
                     None => Line { shown, name: String::new(), detail: String::new(), icon: String::new() },
