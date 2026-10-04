@@ -1,0 +1,42 @@
+[package]
+name = "herolauncher"
+version = "0.1.0"
+description = "A lightweight app launcher for Wayland (and X11), built on HeroUI"
+repository = "https://github.com/HeroineOS/HeroLauncher"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+
+[dependencies]
+heroui = { git = "https://github.com/HeroineOS/HeroUI", features = ["layer-shell"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+toml_edit = { version = "0.23", default-features = false, features = ["parse", "display"] }
+
+# Native Wayland overlays need wlr-layer-shell, which upstream fltk-sys lacks.
+# The HeroineOS fork is fltk-sys 1.5.23 plus layer-shell (same API).
+[patch.crates-io]
+fltk-sys = { git = "https://github.com/HeroineOS/fltk-sys" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[package.metadata.deb]
+maintainer = "HeroineOS <https://github.com/HeroineOS>"
+copyright = "HeroineOS contributors"
+section = "x11"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+A lightweight app launcher built on HeroUI: search installed apps, launch \
+them, and keep favorites. Opens as a menu at a panel button (HeroBar's \
+launcher module) or in the middle of the screen (from a keyboard shortcut). \
+Runs only while open."""
+assets = [
+    ["target/release/herolauncher", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/herolauncher/README.md", "644"],
+    ["res/launcher.toml", "usr/share/doc/herolauncher/examples/launcher.toml", "644"],
+]
