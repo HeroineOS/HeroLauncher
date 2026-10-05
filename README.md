@@ -15,8 +15,11 @@ Type to find an installed app and start it; keep your most used apps as favorite
   taskbar's folders), or split: favorites on one side, all apps on the other.
 - **Categories** like XFCE's menu (Games, Development, Internet, Office...): buttons above
   the apps show one at a time (Tab / Shift+Tab step through them).
-- **Smooth:** it unrolls from the button (menu) or grows from the middle (centered), and
-  rolls away when closed (instant with the theme's `animations = false`).
+- **Smooth:** it fades in while unfolding from the bar (menu) or growing and rising into
+  place (centered), settling with a slight bounce, and fades away when closed, including
+  when the shortcut closes it (instant with the theme's `animations = false`). The panel is
+  drawn once; each frame only paints that picture scaled and faded and sends the compositor
+  just that area, so it's smooth on slow ARM boards too.
 - **Keyboard first:** type right away, Up/Down to pick, Enter to start, Escape to close. A
   click outside closes it too. Mouse, touch scrolling and right-click menus work as well.
 - **Costs nothing when closed:** it's a separate program that only runs while it's open.

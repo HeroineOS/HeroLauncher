@@ -258,14 +258,23 @@ fn terminal(configured: &str) -> String {
 pub fn launch(app: &App, terminal_cmd: &str) {
     let cmd = if app.terminal { format!("{} -e {}", terminal(terminal_cmd), app.exec) } else { app.exec.clone() };
     use std::os::unix::process::CommandExt;
-    let _ = std::process::Command::new("sh")
+    let mut sh = std::process::Command::new("sh");
+    sh
         .arg("-c")
         .arg(format!("exec {cmd}"))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .process_group(0)
-        .spawn();
+        .process_group(0);
+    // The launcher blocks the signal that closes it (see main.rs); apps
+    // must not inherit that.
+    unsafe {
+        sh.pre_exec(|| {
+            crate::unblock_close_signal();
+            Ok(())
+        });
+    }
+    let _ = sh.spawn();
 }
 
 #[cfg(test)]

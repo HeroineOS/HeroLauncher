@@ -235,6 +235,19 @@ impl Launcher {
 impl heroui::App for Launcher {
     type Message = Msg;
 
+    /// Another `herolauncher` asking this one to close.
+    fn subscriptions(&self) -> Vec<Subscription<Msg>> {
+        vec![Subscription::worker(|out| {
+            let set = close_signal_set();
+            loop {
+                let mut sig = 0;
+                if unsafe { libc::sigwait(&set, &mut sig) } == 0 {
+                    out.send(Msg::Close);
+                }
+            }
+        })]
+    }
+
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
             Msg::Query(q) => {
@@ -296,14 +309,15 @@ impl heroui::App for Launcher {
                 if self.closing {
                     return Task::none();
                 }
-                // Roll up, then quit (at once without animations).
+                // Animate away, then quit (the animation sends Quit; this
+                // is in case its frames stall). At once without animations.
                 self.closing = true;
                 self.menu = None;
                 if !heroui::anim::enabled() || !heroui::is_layer() {
                     return Task::quit();
                 }
                 return Task::perform(|| {
-                    std::thread::sleep(std::time::Duration::from_millis(CLOSE_MS + 10));
+                    std::thread::sleep(std::time::Duration::from_millis(CLOSE_MS + 400));
                     Msg::Quit
                 });
             }
@@ -381,23 +395,25 @@ fn focused(input: Element<Launcher, Msg>) -> Element<Launcher, Msg> {
 }
 
 /// Opening and closing animations (ms).
-const OPEN_MS: u64 = 170;
-const CLOSE_MS: u64 = 110;
+const OPEN_MS: u64 = 280;
+const CLOSE_MS: u64 = 150;
 
-/// Where the panel shows while it opens (`r` 0 → 1) or closes: a menu
-/// unrolls from its panel's edge; a centered one grows from the middle,
-/// rising a little. (clip rectangle, how far the content is lowered)
-fn reveal_rect(place: Place, (x, y, w, h): (i32, i32, i32, i32), r: f64) -> ((i32, i32, i32, i32), i32) {
+/// How the panel looks at `r` (0: hidden, 1: open; a little past 1 while
+/// opening settles): a menu unfolds from its bar's edge, a centered one
+/// grows from a bit smaller, rising, as it fades in. (point to scale
+/// around, scale, offset, opacity)
+fn reveal(place: Place, (x, y, w, h): (i32, i32, i32, i32), r: f64) -> ((f64, f64), (f64, f64), (f64, f64), f64) {
+    let alpha = (r * 1.4).clamp(0.0, 1.0);
+    let cx = x as f64 + w as f64 / 2.0;
     match place {
+        // From the bar's edge, never over the bar.
         Place::Menu { bottom, .. } => {
-            let rh = ((h as f64 * r).round() as i32).max(1);
-            ((x, if bottom { y + h - rh } else { y }, w, rh), 0)
+            let edge = if bottom { (y + h) as f64 } else { y as f64 };
+            ((cx, edge), (0.97 + 0.03 * r, 0.82 + 0.18 * r), (0.0, 0.0), alpha)
         }
         Place::Center => {
-            let s = 0.86 + 0.14 * r;
-            let (rw, rh) = ((w as f64 * s) as i32, (h as f64 * s) as i32);
-            let dy = ((1.0 - r) * 16.0).round() as i32;
-            ((x + (w - rw) / 2, y + (h - rh) / 2 + dy, rw, rh), dy)
+            let s = 0.9 + 0.1 * r;
+            ((cx, y as f64 + h as f64 / 2.0), (s, s), (0.0, (1.0 - r) * 18.0), alpha)
         }
     }
 }
@@ -405,11 +421,16 @@ fn reveal_rect(place: Place, (x, y, w, h): (i32, i32, i32, i32), r: f64) -> ((i3
 /// The whole window: `panel` at its place, its background drawn here. A
 /// click outside it or Escape closes the launcher; Up/Down move the
 /// selection while typing, Tab the category. On a layer-shell overlay it
-/// opens and closes with a short animation.
+/// opens and closes with an animation: the panel is drawn once into a
+/// picture, and each frame only paints that picture scaled and faded,
+/// sending the compositor just the area it covers.
 fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Element<Launcher, Msg> {
+    use heroui::fltk::enums::Damage;
     Element::new(move |ctx| {
         let mut g = Group::default();
         g.set_frame(FrameType::NoBox);
+        // The draw callback below draws the children (not FLTK as well).
+        g.super_draw(false);
         let child = panel.build(ctx);
         g.end();
         let rect = Rc::new(Cell::new((0, 0, 1, 1)));
@@ -417,73 +438,115 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
         // window is the panel (and nothing animates).
         let full = heroui::is_layer();
         let animated = full && heroui::anim::enabled();
-        let reveal = heroui::anim::Tween::new(if animated { 0.0 } else { 1.0 });
-        // Places the panel: at its rectangle, lowered while it rises.
-        let place_child = {
-            let (rect, reveal, child) = (rect.clone(), reveal.clone(), child.clone());
-            move |gx: i32, gy: i32| {
-                let r = rect.get();
-                let (_, dy) = reveal_rect(place, r, reveal.get());
-                child.clone().resize(gx + r.0, gy + r.1 + dy, r.2, r.3);
-            }
-        };
-        let place_child = Rc::new(place_child);
+        let reveal_at = heroui::anim::Tween::new(if animated { 0.0 } else { 1.0 });
+        // The picture painted while animating, and whether the panel
+        // changed since it was taken.
+        let snap = Rc::new(heroui::fx::Snapshot::new());
+        let stale = Rc::new(Cell::new(false));
+        // Animating (opening or closing); closing; the area last painted.
+        let moving = Rc::new(Cell::new(animated));
+        let closing = Rc::new(Cell::new(false));
+        let painted = Rc::new(Cell::new((0, 0, 0, 0)));
         {
-            let (rect, place_child) = (rect.clone(), place_child.clone());
+            let (rect, child) = (rect.clone(), child.clone());
             g.resize_callback(move |_, x, y, w, h| {
-                rect.set(if full { panel_rect(place, size, w, h) } else { (0, 0, w, h) });
-                place_child(x, y);
+                let r = if full { panel_rect(place, size, w, h) } else { (0, 0, w, h) };
+                rect.set(r);
+                child.clone().resize(x + r.0, y + r.1, r.2, r.3);
             });
         }
-        // Each animation frame: move the panel, repaint the window.
+        let emit = ctx.emitter();
+        // Each frame: repaint where the panel was and where it is now.
         let frame = {
-            let (g2, place_child) = (g.clone(), place_child.clone());
-            move || {
-                place_child(g2.x(), g2.y());
-                if let Some(mut win) = g2.window() {
-                    win.redraw();
+            let (g, rect, at, moving, closing, painted, emit) =
+                (g.clone(), rect.clone(), reveal_at.clone(), moving.clone(), closing.clone(), painted.clone(), emit.clone());
+            Rc::new(move || {
+                let Some(mut win) = g.window() else { return };
+                let (x, y, w, h) = rect.get();
+                let r = (g.x() + x, g.y() + y, w, h);
+                let (o, s, d, _) = reveal(place, r, at.get());
+                let now = heroui::fx::bounds(r, o, s, d);
+                let (dx, dy, dw, dh) = heroui::fx::union(painted.replace(now), now);
+                // The last frame of a move is exactly at its end.
+                if closing.get() && at.get() == 0.0 {
+                    emit(Msg::Quit);
+                } else if !closing.get() && at.get() == 1.0 {
+                    moving.set(false);
                 }
-            }
+                win.set_damage_area(Damage::All, dx, dy, dw, dh);
+            })
         };
-        if animated {
-            let (reveal, frame) = (reveal.clone(), frame.clone());
-            fapp::add_timeout3(0.0, move |_| reveal.animate_to(1.0, std::time::Duration::from_millis(OPEN_MS), frame.clone()));
-        }
         {
-            let (reveal, frame) = (reveal.clone(), frame.clone());
-            let closing = Cell::new(false);
+            let (at, frame, moving, stale, painted, g) =
+                (reveal_at.clone(), frame.clone(), moving.clone(), stale.clone(), painted.clone(), g.clone());
             ctx.bind(move |l: &Launcher| {
                 if l.closing && animated && !closing.replace(true) {
-                    reveal.animate_to(0.0, std::time::Duration::from_millis(CLOSE_MS), frame.clone());
+                    moving.set(true);
+                    let f = frame.clone();
+                    at.animate_ease(0.0, std::time::Duration::from_millis(CLOSE_MS), heroui::anim::ease_in, move || f());
+                } else if moving.get() {
+                    // Changed while animating (typing right away): take a
+                    // new picture in a full repaint.
+                    stale.set(true);
+                    if let Some(mut win) = g.window() {
+                        let (x, y, w, h) = painted.get();
+                        win.set_damage_area(Damage::All, x, y, w, h);
+                    }
                 }
             });
         }
         {
-            let (rect, reveal) = (rect.clone(), reveal.clone());
+            let (rect, at) = (rect.clone(), reveal_at.clone());
+            let started = Cell::new(!animated);
             g.draw(move |g| {
                 let t = heroui::theme::current();
                 let (x, y, w, h) = rect.get();
-                let r = reveal.get();
-                let ((cx, cy, cw, ch), _) = reveal_rect(place, (g.x() + x, g.y() + y, w, h), r);
+                let (x, y) = (g.x() + x, g.y() + y);
+                let draw_all = |g: &mut Group| {
+                    let rad = if heroui::is_transparent() { t.radius.min(14).min(h / 2) } else { 0 };
+                    draw::set_draw_color(t.border);
+                    draw::draw_rounded_rectf(x, y, w, h, rad);
+                    draw::set_draw_color(t.background);
+                    draw::draw_rounded_rectf(x + 1, y + 1, w - 2, h - 2, (rad - 1).max(0));
+                    g.draw_children();
+                };
+                if moving.get() {
+                    // Start once the window is on screen, so no frame of
+                    // the opening is missed.
+                    if !started.replace(true) {
+                        let (at, frame) = (at.clone(), frame.clone());
+                        fapp::add_timeout3(0.0, move |_| {
+                            let f = frame.clone();
+                            at.animate_ease(1.0, std::time::Duration::from_millis(OPEN_MS), heroui::anim::snappy, move || f());
+                        });
+                    }
+                    // Child-only updates wait for the full repaint the
+                    // binding asks for.
+                    if g.damage_type() == Damage::Child {
+                        return;
+                    }
+                    if !snap.is_recorded() || stale.replace(false) {
+                        // All of the panel, whatever part is repainted.
+                        draw::push_no_clip();
+                        snap.record((x, y, w, h), || draw_all(&mut g.clone()));
+                        draw::pop_clip();
+                    }
+                    if snap.is_recorded() {
+                        let (o, s, d, a) = reveal(place, (x, y, w, h), at.get());
+                        snap.paint(o, s, d, a);
+                        return;
+                    }
+                }
+                snap.clear();
                 // Only on full redraws: when just a child changed, it
                 // repaints itself over what's there.
-                if g.damage_type() != heroui::fltk::enums::Damage::Child {
-                    let rad = if heroui::is_transparent() { t.radius.min(14).min(ch / 2) } else { 0 };
-                    draw::set_draw_color(t.border);
-                    draw::draw_rounded_rectf(cx, cy, cw, ch, rad);
-                    draw::set_draw_color(t.background);
-                    draw::draw_rounded_rectf(cx + 1, cy + 1, cw - 2, ch - 2, (rad - 1).max(0));
-                }
-                if r < 1.0 {
-                    draw::push_clip(cx + 1, cy + 1, cw - 2, ch - 2);
-                    g.draw_children();
-                    draw::pop_clip();
+                if g.damage_type() != Damage::Child {
+                    draw_all(g);
                 } else {
                     g.draw_children();
                 }
             });
         }
-        let emit = ctx.emitter();
         g.handle(move |g, ev| match ev {
             Event::Push => {
                 let (x, y, w, h) = rect.get();
@@ -628,12 +691,38 @@ fn pid_file() -> std::path::PathBuf {
 
 /// If a launcher is open, closes it and returns true (this run toggles it
 /// off). Otherwise records this one.
+/// Sent by a second `herolauncher` to close the open one.
+const CLOSE_SIGNAL: libc::c_int = libc::SIGUSR1;
+
+fn close_signal_set() -> libc::sigset_t {
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, CLOSE_SIGNAL);
+        set
+    }
+}
+
+/// Blocks the close signal in this thread and the threads it starts, so
+/// it waits for the thread in [`Launcher::subscriptions`] to take it.
+fn block_close_signal() {
+    let set = close_signal_set();
+    unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
+}
+
+/// For started apps (between fork and exec).
+pub(crate) fn unblock_close_signal() {
+    let set = close_signal_set();
+    unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut()) };
+}
+
 fn toggle_off() -> bool {
     let file = pid_file();
     if let Some(pid) = std::fs::read_to_string(&file).ok().and_then(|s| s.trim().parse::<i32>().ok()) {
         let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
         if pid as u32 != std::process::id() && comm.trim() == "herolauncher" {
-            unsafe { libc::kill(pid, libc::SIGTERM) };
+            // It closes with its animation (SIGTERM would end it at once).
+            unsafe { libc::kill(pid, CLOSE_SIGNAL) };
             return true;
         }
     }
@@ -646,6 +735,7 @@ fn main() {
     if toggle_off() {
         return;
     }
+    block_close_signal();
     let cfg = config::load();
     let apps = apps::all();
     let mut s = Settings::new("Launcher");
@@ -653,7 +743,7 @@ fn main() {
     s.kind = WindowKind::Overlay;
     s.transparent = true;
     s.decorated = false;
-    s.size = (cfg.width, cfg.height);
+    s.size = cfg.size();
     // X11 (no layer-shell): the window is the panel, placed like it.
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
         let (sx, sy, sw, sh) = fapp::screen_xywh(0);

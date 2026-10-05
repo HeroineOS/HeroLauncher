@@ -91,7 +91,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "herolauncher"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "heroui",
  "libc",
@@ -102,8 +102,8 @@ dependencies = [
 
 [[package]]
 name = "heroui"
-version = "0.1.11"
-source = "git+https://github.com/HeroineOS/HeroUI#3d9488490143d463b1821a20d140a72d9d843739"
+version = "0.1.12"
+source = "git+https://github.com/HeroineOS/HeroUI#b16c895fa58c535cba512fce0995a6cdf3d5ccfa"
 dependencies = [
  "fltk",
  "fltk-sys",
