@@ -20,6 +20,34 @@ pub struct App {
     /// `Exec=` with the field codes (%U, %f...) removed.
     pub exec: String,
     pub terminal: bool,
+    /// Its menu category (one, like XFCE's menu): an index into
+    /// [`CATEGORIES`].
+    pub category: usize,
+}
+
+/// Menu categories, like XFCE's: (label, the freedesktop.org main
+/// categories that go in it, best first). An app goes in the first one
+/// whose categories it lists (Settings before System: many apps are
+/// both); the last one, "Other", takes the rest.
+pub const CATEGORIES: [(&str, &[&str]); 12] = [
+    ("Games", &["Game"]),
+    ("Development", &["Development"]),
+    ("Graphics", &["Graphics"]),
+    ("Internet", &["Network"]),
+    ("Multimedia", &["AudioVideo", "Audio", "Video"]),
+    ("Office", &["Office"]),
+    ("Education", &["Education", "Science"]),
+    ("Settings", &["Settings"]),
+    ("System", &["System"]),
+    ("Accessories", &["Utility"]),
+    ("Documentation", &["Documentation"]),
+    ("Other", &[]),
+];
+
+/// The category for a `Categories=` value.
+fn category_of(categories: &str) -> usize {
+    let listed: Vec<&str> = categories.split(';').map(str::trim).collect();
+    CATEGORIES.iter().position(|(_, main)| main.iter().any(|m| listed.contains(m))).unwrap_or(CATEGORIES.len() - 1)
 }
 
 /// Where `.desktop` files are, most important first (the user's own
@@ -53,7 +81,7 @@ fn languages() -> Vec<String> {
 /// Parses an entry; None if it shouldn't be listed (hidden, not an
 /// application, not for this desktop, its program missing).
 pub fn parse(id: &str, text: &str, langs: &[String], desktops: &[String]) -> Option<App> {
-    let mut app = App { id: id.to_owned(), ..Default::default() };
+    let mut app = App { id: id.to_owned(), category: CATEGORIES.len() - 1, ..Default::default() };
     let mut in_entry = false;
     let mut kind = String::new();
     // Rank of the language each localized value came from (lower: better).
@@ -96,6 +124,7 @@ pub fn parse(id: &str, text: &str, langs: &[String], desktops: &[String]) -> Opt
             "Icon" => app.icon = v.to_owned(),
             "Exec" => app.exec = strip_field_codes(v),
             "Terminal" => app.terminal = v == "true",
+            "Categories" => app.category = category_of(v),
             "NoDisplay" | "Hidden" if v == "true" => return None,
             "OnlyShowIn" if !v.split(';').any(|d| desktops.iter().any(|x| x == d)) => return None,
             "NotShowIn" if v.split(';').any(|d| desktops.iter().any(|x| x == d)) => return None,
@@ -257,6 +286,9 @@ mod tests {
         assert!(app("[Desktop Entry]\nType=Application\nName=A\nExec=a\nOnlyShowIn=GNOME;HeroWM;\n").is_some());
         assert!(app("[Desktop Entry]\nType=Application\nName=A\nExec=a\nTryExec=/no/such/program\n").is_none());
         assert_eq!(strip_field_codes("app --x=100%% %U"), "app --x=100%");
+        let cat = |c: &str| CATEGORIES[category_of(c)].0;
+        assert_eq!((cat("Game;ArcadeGame;"), cat("Network;WebBrowser;"), cat("Settings;System;")), ("Games", "Internet", "Settings"));
+        assert_eq!(cat("X-Unknown;"), "Other");
     }
 
     #[test]

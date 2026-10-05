@@ -12,7 +12,12 @@ pub const DEFAULT: &str = include_str!("../res/launcher.toml");
 pub struct Config {
     /// Desktop file ids shown first, as a grid ("Start" / favorites).
     pub favorites: Vec<String>,
-    /// The panel's size.
+    /// How apps are shown: "list" (rows), "grid" (icons with names), or
+    /// "split" (favorites on one side, all apps on the other).
+    pub layout: Layout,
+    /// Category buttons (Games, Internet...) to narrow the apps down.
+    pub categories: bool,
+    /// The panel's size (width: 0 = a default for the layout).
     pub width: i32,
     pub height: i32,
     /// For apps that run in a terminal ("" = $TERMINAL or a common one).
@@ -21,7 +26,30 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { favorites: vec![], width: 460, height: 540, terminal: String::new() }
+        Config { favorites: vec![], layout: Layout::List, categories: true, width: 0, height: 540, terminal: String::new() }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Layout {
+    #[default]
+    List,
+    Grid,
+    Split,
+}
+
+impl Config {
+    /// The panel's size.
+    pub fn size(&self) -> (i32, i32) {
+        let w = match (self.width, self.layout) {
+            // Two sides need room.
+            (w, Layout::Split) if w > 0 => w.max(640),
+            (0, Layout::Split) => 720,
+            (0, _) => 480,
+            (w, _) => w,
+        };
+        (w, self.height)
     }
 }
 
@@ -34,7 +62,9 @@ pub fn path() -> Option<PathBuf> {
 
 pub fn parse(text: &str) -> Result<Config, String> {
     let mut c: Config = toml::from_str(text).map_err(|e| e.to_string())?;
-    c.width = c.width.clamp(240, 2000);
+    if c.width != 0 {
+        c.width = c.width.clamp(240, 2000);
+    }
     c.height = c.height.clamp(200, 2000);
     Ok(c)
 }
@@ -82,7 +112,10 @@ mod tests {
     #[test]
     fn default_parses() {
         let c = parse(DEFAULT).unwrap();
-        assert!(c.width >= 240 && c.favorites.is_empty());
+        assert!(c.size().0 >= 240 && c.favorites.is_empty() && c.layout == Layout::List);
+        assert_eq!(parse("layout = \"split\"\nwidth = 460").unwrap().size().0, 640, "two sides need room");
+        assert_eq!(parse("layout = \"split\"").unwrap().size().0, 720);
+        assert!(parse("layout = \"tiles\"").is_err());
         assert!(parse("favorits = []").is_err(), "typos are reported");
     }
 

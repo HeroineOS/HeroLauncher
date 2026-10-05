@@ -10,6 +10,9 @@
 # the favorites.
 
 favorites = []           # Desktop file names, shown first ("firefox-esr", "foot")
-width = 460              # The panel's size
+layout = "list"          # "list": rows of icon and name; "grid": icons with
+                         # names; "split": favorites beside all apps
+categories = true        # Buttons to show only Games, Internet, Office...
+width = 0                # The panel's size (0: 480, or 720 for "split")
 height = 540
 terminal = ""            # For terminal apps ("" = $TERMINAL or the first one found)

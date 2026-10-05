@@ -11,6 +11,12 @@ Type to find an installed app and start it; keep your most used apps as favorite
   closes it.
 - **Favorites** ("Start"): right-click an app to add it; favorites show first as a grid of
   icons, separate from the taskbar's pinned apps. Right-click a favorite to move or remove it.
+- **Three layouts:** a list (icon, name, what it is), a grid of icons with names (like the
+  taskbar's folders), or split: favorites on one side, all apps on the other.
+- **Categories** like XFCE's menu (Games, Development, Internet, Office...): buttons above
+  the apps show one at a time (Tab / Shift+Tab step through them).
+- **Smooth:** it unrolls from the button (menu) or grows from the middle (centered), and
+  rolls away when closed (instant with the theme's `animations = false`).
 - **Keyboard first:** type right away, Up/Down to pick, Enter to start, Escape to close. A
   click outside closes it too. Mouse, touch scrolling and right-click menus work as well.
 - **Costs nothing when closed:** it's a separate program that only runs while it's open.
@@ -49,7 +55,9 @@ bindsym $mod+space exec herolauncher
 
 ```toml
 favorites = ["firefox-esr", "foot"]   # desktop file names; edited by the launcher too
-width = 460                           # the panel's size
+layout = "list"                       # "list", "grid" or "split"
+categories = true                     # category buttons (Games, Internet...)
+width = 0                             # the panel's size (0: 480, or 720 for "split")
 height = 540
 terminal = ""                         # for terminal apps ("" = $TERMINAL or the first found)
 ```

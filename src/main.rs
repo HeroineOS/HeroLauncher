@@ -69,10 +69,21 @@ impl Shown {
     }
 }
 
+/// Which lines a list widget shows: everything (list and grid layouts),
+/// or one side of the split layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    Main,
+    Favs,
+    Apps,
+}
+
 /// An app's right-click menu.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Menu {
     pub app: usize,
+    /// The list it was opened from.
+    pub part: Part,
     /// Where it drops down from, in the list widget.
     pub rect: (i32, i32, i32, i32),
     pub labels: Vec<&'static str>,
@@ -97,8 +108,14 @@ pub enum Msg {
     Step(i32),
     /// Start the app at this line.
     Launch(usize),
-    /// Right-click on an app (its index), at this rectangle of the list.
-    OpenMenuAt(usize, (i32, i32, i32, i32)),
+    /// Right-click on an app (its index), at this rectangle of a list.
+    OpenMenuAt(usize, (i32, i32, i32, i32), Part),
+    /// Show only apps of a category (None: all).
+    Category(Option<usize>),
+    /// Tab / Shift+Tab: the next or previous category.
+    StepCategory(i32),
+    /// Closing: the panel rolls up, then the launcher quits.
+    Quit,
     CloseMenu,
     MenuPick(usize),
     Close,
@@ -113,33 +130,49 @@ pub struct Launcher {
     pub sel: Option<usize>,
     pub menu: Option<Menu>,
     pub place: Place,
+    /// The category shown (None: all), and the ones that have apps.
+    pub category: Option<usize>,
+    pub cats: Vec<usize>,
+    /// Closing (animating away).
+    pub closing: bool,
     /// The app index of each favorite that's installed, in order.
     fav_apps: Vec<usize>,
 }
 
 impl Launcher {
     fn new(apps: Vec<AppInfo>, cfg: Config, place: Place) -> Launcher {
-        let mut l = Launcher { apps, cfg, query: String::new(), shown: vec![], sel: None, menu: None, place, fav_apps: vec![] };
+        let mut cats: Vec<usize> = apps.iter().map(|a| a.category).collect();
+        cats.sort_unstable();
+        cats.dedup();
+        let mut l = Launcher { apps, cfg, query: String::new(), shown: vec![], sel: None, menu: None, place, category: None, cats, closing: false, fav_apps: vec![] };
         l.refresh();
         l
     }
 
-    /// Rebuilds the list for the query: favorites and all apps, or the
-    /// matches (the best one selected, for Enter).
+    /// Rebuilds the list for the query and category: favorites and the
+    /// apps, or the matches (the best one selected, for Enter). The split
+    /// layout keeps its favorites side while searching.
     fn refresh(&mut self) {
+        use config::Layout;
         self.fav_apps = self.cfg.favorites.iter().filter_map(|id| self.apps.iter().position(|a| a.id == *id)).collect();
+        let in_cat = |a: &AppInfo| self.category.is_none_or(|c| a.category == c);
+        let searching = !self.query.trim().is_empty();
+        let split = self.cfg.layout == Layout::Split;
         self.shown.clear();
-        if self.query.trim().is_empty() {
-            if !self.fav_apps.is_empty() {
-                self.shown.push(Shown::Header("Favorites"));
-                self.shown.extend(self.fav_apps.iter().map(|&i| Shown::Fav(i)));
-                self.shown.push(Shown::Header("All apps"));
-            }
-            self.shown.extend((0..self.apps.len()).map(Shown::Row));
-            self.sel = None;
+        if split {
+            self.shown.extend(self.fav_apps.iter().map(|&i| Shown::Fav(i)));
+        } else if !searching && self.category.is_none() && !self.fav_apps.is_empty() {
+            self.shown.push(Shown::Header("Favorites"));
+            self.shown.extend(self.fav_apps.iter().map(|&i| Shown::Fav(i)));
+            self.shown.push(Shown::Header("All apps"));
+        }
+        if searching {
+            let hits = apps::search(&self.apps, &self.query);
+            self.shown.extend(hits.into_iter().filter(|&i| in_cat(&self.apps[i])).map(Shown::Row));
+            self.sel = self.shown.iter().position(|s| matches!(s, Shown::Row(_)));
         } else {
-            self.shown.extend(apps::search(&self.apps, &self.query).into_iter().map(Shown::Row));
-            self.sel = self.shown.iter().position(|s| s.app().is_some());
+            self.shown.extend((0..self.apps.len()).filter(|&i| in_cat(&self.apps[i])).map(Shown::Row));
+            self.sel = None;
         }
     }
 
@@ -154,7 +187,7 @@ impl Launcher {
         self.apps.get(app).is_some_and(|a| self.cfg.favorites.contains(&a.id))
     }
 
-    pub fn menu_for(&self, app: usize, rect: (i32, i32, i32, i32)) -> Menu {
+    pub fn menu_for(&self, app: usize, rect: (i32, i32, i32, i32), part: Part) -> Menu {
         let mut m: Vec<(&'static str, MenuAct)> = vec![("Open", MenuAct::Launch)];
         if self.is_fav(app) {
             let pos = self.fav_apps.iter().position(|&i| i == app).unwrap_or(0);
@@ -169,7 +202,7 @@ impl Launcher {
             m.push(("Add to favorites", MenuAct::AddFav));
         }
         let (labels, acts) = m.into_iter().unzip();
-        Menu { app, rect, labels, acts }
+        Menu { app, part, rect, labels, acts }
     }
 
     fn edit_favorites(&mut self, app: usize, act: MenuAct) {
@@ -233,7 +266,23 @@ impl heroui::App for Launcher {
                     return self.launch(app);
                 }
             }
-            Msg::OpenMenuAt(app, rect) => self.menu = Some(self.menu_for(app, rect)),
+            Msg::OpenMenuAt(app, rect, part) => self.menu = Some(self.menu_for(app, rect, part)),
+            Msg::Category(c) => {
+                self.category = c;
+                self.menu = None;
+                self.refresh();
+            }
+            Msg::StepCategory(d) => {
+                if !self.cfg.categories {
+                    return Task::none();
+                }
+                // None (All) is before the first one.
+                let n = self.cats.len() as i32 + 1;
+                let cur = self.category.and_then(|c| self.cats.iter().position(|&x| x == c)).map_or(0, |k| k as i32 + 1);
+                let next = (cur + d).rem_euclid(n);
+                return self.update(Msg::Category(if next == 0 { None } else { Some(self.cats[next as usize - 1]) }));
+            }
+            Msg::Quit => return Task::quit(),
             Msg::CloseMenu => self.menu = None,
             Msg::MenuPick(k) => {
                 let Some(m) = self.menu.take() else { return Task::none() };
@@ -243,28 +292,64 @@ impl heroui::App for Launcher {
                     None => {}
                 }
             }
-            Msg::Close => return Task::quit(),
+            Msg::Close => {
+                if self.closing {
+                    return Task::none();
+                }
+                // Roll up, then quit (at once without animations).
+                self.closing = true;
+                self.menu = None;
+                if !heroui::anim::enabled() || !heroui::is_layer() {
+                    return Task::quit();
+                }
+                return Task::perform(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(CLOSE_MS + 10));
+                    Msg::Quit
+                });
+            }
         }
         Task::none()
     }
 
     fn view(&self) -> Element<Self, Msg> {
-        let panel = column(vec![
-            row(vec![icon(|_: &Launcher| "search".to_string(), 18).fixed(28), focused(text_input_submit(|l: &Launcher| l.query.clone(), Msg::Query, Msg::Submit))])
-                .fixed(38),
-            popover_at(
-                list::view(),
-                |l: &Launcher| l.menu.as_ref().map(|m| m.rect),
-                |l: &Launcher| l.menu.is_some(),
-                Msg::CloseMenu,
-                menu_size,
-                menu_view(),
-            ),
-        ])
-        .padding(12)
-        .spacing(8);
-        overlay(panel, self.place, (self.cfg.width, self.cfg.height))
+        use config::Layout;
+        let search = row(vec![icon(|_: &Launcher| "search".to_string(), 18).fixed(28), focused(text_input_submit(|l: &Launcher| l.query.clone(), Msg::Query, Msg::Submit))]).fixed(38);
+        let grid = self.cfg.layout == Layout::Grid;
+        let apps_side = |part: Part| {
+            let mut items = Vec::new();
+            if self.cfg.categories {
+                items.push(list::categories().fixed(32));
+            }
+            items.push(with_menu(list::view(part, grid), part));
+            column(items).spacing(8)
+        };
+        let body = if self.cfg.layout == Layout::Split {
+            // Favorites on the left, a line, all apps on the right.
+            let left = (self.cfg.size().0 * 2 / 5).clamp(160, 340);
+            row(vec![
+                column(vec![list::section("Favorites").fixed(32), with_menu(list::view(Part::Favs, true), Part::Favs)]).spacing(8).fixed(left),
+                list::divider().fixed(1),
+                apps_side(Part::Apps),
+            ])
+            .spacing(10)
+        } else {
+            apps_side(Part::Main)
+        };
+        let panel = column(vec![search, body]).padding(12).spacing(8);
+        overlay(panel, self.place, self.cfg.size())
     }
+}
+
+/// `list` with its right-click menu.
+fn with_menu(list: Element<Launcher, Msg>, part: Part) -> Element<Launcher, Msg> {
+    popover_at(
+        list,
+        |l: &Launcher| l.menu.as_ref().map(|m| m.rect),
+        move |l: &Launcher| l.menu.as_ref().is_some_and(|m| m.part == part),
+        Msg::CloseMenu,
+        menu_size,
+        menu_view(),
+    )
 }
 
 /// `input`, focused once the window shows (type right away).
@@ -295,43 +380,107 @@ fn focused(input: Element<Launcher, Msg>) -> Element<Launcher, Msg> {
     })
 }
 
+/// Opening and closing animations (ms).
+const OPEN_MS: u64 = 170;
+const CLOSE_MS: u64 = 110;
+
+/// Where the panel shows while it opens (`r` 0 → 1) or closes: a menu
+/// unrolls from its panel's edge; a centered one grows from the middle,
+/// rising a little. (clip rectangle, how far the content is lowered)
+fn reveal_rect(place: Place, (x, y, w, h): (i32, i32, i32, i32), r: f64) -> ((i32, i32, i32, i32), i32) {
+    match place {
+        Place::Menu { bottom, .. } => {
+            let rh = ((h as f64 * r).round() as i32).max(1);
+            ((x, if bottom { y + h - rh } else { y }, w, rh), 0)
+        }
+        Place::Center => {
+            let s = 0.86 + 0.14 * r;
+            let (rw, rh) = ((w as f64 * s) as i32, (h as f64 * s) as i32);
+            let dy = ((1.0 - r) * 16.0).round() as i32;
+            ((x + (w - rw) / 2, y + (h - rh) / 2 + dy, rw, rh), dy)
+        }
+    }
+}
+
 /// The whole window: `panel` at its place, its background drawn here. A
 /// click outside it or Escape closes the launcher; Up/Down move the
-/// selection while typing.
+/// selection while typing, Tab the category. On a layer-shell overlay it
+/// opens and closes with a short animation.
 fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Element<Launcher, Msg> {
     Element::new(move |ctx| {
         let mut g = Group::default();
         g.set_frame(FrameType::NoBox);
-        let mut child = panel.build(ctx);
+        let child = panel.build(ctx);
         g.end();
         let rect = Rc::new(Cell::new((0, 0, 1, 1)));
         // Full-screen overlay (Wayland): the panel at its place. Else the
-        // window is the panel.
+        // window is the panel (and nothing animates).
         let full = heroui::is_layer();
+        let animated = full && heroui::anim::enabled();
+        let reveal = heroui::anim::Tween::new(if animated { 0.0 } else { 1.0 });
+        // Places the panel: at its rectangle, lowered while it rises.
+        let place_child = {
+            let (rect, reveal, child) = (rect.clone(), reveal.clone(), child.clone());
+            move |gx: i32, gy: i32| {
+                let r = rect.get();
+                let (_, dy) = reveal_rect(place, r, reveal.get());
+                child.clone().resize(gx + r.0, gy + r.1 + dy, r.2, r.3);
+            }
+        };
+        let place_child = Rc::new(place_child);
         {
-            let rect = rect.clone();
+            let (rect, place_child) = (rect.clone(), place_child.clone());
             g.resize_callback(move |_, x, y, w, h| {
-                let r = if full { panel_rect(place, size, w, h) } else { (0, 0, w, h) };
-                rect.set(r);
-                child.resize(x + r.0, y + r.1, r.2, r.3);
+                rect.set(if full { panel_rect(place, size, w, h) } else { (0, 0, w, h) });
+                place_child(x, y);
+            });
+        }
+        // Each animation frame: move the panel, repaint the window.
+        let frame = {
+            let (g2, place_child) = (g.clone(), place_child.clone());
+            move || {
+                place_child(g2.x(), g2.y());
+                if let Some(mut win) = g2.window() {
+                    win.redraw();
+                }
+            }
+        };
+        if animated {
+            let (reveal, frame) = (reveal.clone(), frame.clone());
+            fapp::add_timeout3(0.0, move |_| reveal.animate_to(1.0, std::time::Duration::from_millis(OPEN_MS), frame.clone()));
+        }
+        {
+            let (reveal, frame) = (reveal.clone(), frame.clone());
+            let closing = Cell::new(false);
+            ctx.bind(move |l: &Launcher| {
+                if l.closing && animated && !closing.replace(true) {
+                    reveal.animate_to(0.0, std::time::Duration::from_millis(CLOSE_MS), frame.clone());
+                }
             });
         }
         {
-            let rect = rect.clone();
+            let (rect, reveal) = (rect.clone(), reveal.clone());
             g.draw(move |g| {
                 let t = heroui::theme::current();
                 let (x, y, w, h) = rect.get();
-                let (x, y) = (g.x() + x, g.y() + y);
+                let r = reveal.get();
+                let ((cx, cy, cw, ch), _) = reveal_rect(place, (g.x() + x, g.y() + y, w, h), r);
                 // Only on full redraws: when just a child changed, it
                 // repaints itself over what's there.
                 if g.damage_type() != heroui::fltk::enums::Damage::Child {
-                    let r = if heroui::is_transparent() { t.radius.min(14) } else { 0 };
+                    let rad = if heroui::is_transparent() { t.radius.min(14).min(ch / 2) } else { 0 };
                     draw::set_draw_color(t.border);
-                    draw::draw_rounded_rectf(x, y, w, h, r);
+                    draw::draw_rounded_rectf(cx, cy, cw, ch, rad);
                     draw::set_draw_color(t.background);
-                    draw::draw_rounded_rectf(x + 1, y + 1, w - 2, h - 2, (r - 1).max(0));
+                    draw::draw_rounded_rectf(cx + 1, cy + 1, cw - 2, ch - 2, (rad - 1).max(0));
                 }
-                g.draw_children();
+                if r < 1.0 {
+                    draw::push_clip(cx + 1, cy + 1, cw - 2, ch - 2);
+                    g.draw_children();
+                    draw::pop_clip();
+                } else {
+                    g.draw_children();
+                }
             });
         }
         let emit = ctx.emitter();
@@ -356,6 +505,10 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
                 }
                 Key::Down => {
                     emit(Msg::Step(1));
+                    true
+                }
+                Key::Tab => {
+                    emit(Msg::StepCategory(if fapp::event_state().contains(heroui::fltk::enums::EventState::Shift) { -1 } else { 1 }));
                     true
                 }
                 Key::Enter | Key::KPEnter if ev == Event::Shortcut => {
@@ -539,7 +692,23 @@ mod tests {
         l.query = "c".into();
         l.refresh();
         assert_eq!((l.shown.as_slice(), l.sel), (&[Shown::Row(2)][..], Some(0)));
-        let m = l.menu_for(0, (0, 0, 1, 1));
+        let m = l.menu_for(0, (0, 0, 1, 1), Part::Main);
         assert_eq!(m.labels, ["Open", "Add to favorites"]);
+    }
+
+    #[test]
+    fn categories_and_split() {
+        let mk = |id: &str, cat: usize| AppInfo { id: id.into(), name: id.into(), exec: id.into(), category: cat, ..Default::default() };
+        let cfg = Config { favorites: vec!["b".into()], layout: config::Layout::Split, ..Default::default() };
+        let mut l = Launcher::new(vec![mk("a", 0), mk("b", 3), mk("c", 3)], cfg, Place::Center);
+        assert_eq!(l.cats, [0, 3]);
+        // Split: favorites, then the apps, no headings.
+        assert_eq!(l.shown, [Shown::Fav(1), Shown::Row(0), Shown::Row(1), Shown::Row(2)]);
+        l.update(Msg::StepCategory(1));
+        assert_eq!((l.category, &l.shown[1..]), (Some(0), &[Shown::Row(0)][..]));
+        l.update(Msg::StepCategory(-1));
+        assert_eq!(l.category, None);
+        l.update(Msg::StepCategory(-1));
+        assert_eq!(l.category, Some(3), "wraps around");
     }
 }
