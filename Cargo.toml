@@ -1,6 +1,6 @@
 [package]
 name = "herolauncher"
-version = "0.2.4"
+version = "0.2.5"
 description = "A lightweight app launcher for Wayland (and X11), built on HeroUI"
 repository = "https://github.com/HeroineOS/HeroLauncher"
 license = "MIT OR Apache-2.0"
