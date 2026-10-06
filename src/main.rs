@@ -14,6 +14,7 @@
 mod apps;
 mod config;
 mod list;
+mod shortcut;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -372,6 +373,7 @@ fn focused(input: Element<Launcher, Msg>) -> Element<Launcher, Msg> {
         let mut w = input.build(ctx);
         // HeroUI turns FLTK's keyboard navigation off; this one takes focus.
         w.set_visible_focus();
+
         // Once the window shows (sooner, on Wayland), and again in case it
         // wasn't yet (X11).
         for delay in [0.0, 0.1, 0.3] {
@@ -456,6 +458,19 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
             });
         }
         let emit = ctx.emitter();
+        // The compositor shortcut that opened the launcher closes it,
+        // before the search field can take the key (see shortcut.rs).
+        thread_local!(static HOOKED: Cell<bool> = const { Cell::new(false) });
+        if !HOOKED.with(|h| h.replace(true)) {
+            let emit = emit.clone();
+            heroui::on_key(move || {
+                let hit = shortcut::is_toggle();
+                if hit {
+                    emit(Msg::Close);
+                }
+                hit
+            });
+        }
         // Each frame: repaint where the panel was and where it is now.
         let frame = {
             let (g, rect, at, moving, closing, painted, emit) =

@@ -8,7 +8,8 @@ Type to find an installed app and start it; keep your most used apps as favorite
   in the middle of the screen, like the launchers riced setups use. A keyboard shortcut and
   the button can each use their own style.
 - **Toggles.** Running `herolauncher` while it's open closes it, so one shortcut opens and
-  closes it.
+  closes it. HeroWM gives every key to the open launcher (its shortcuts too), so the
+  launcher reads HeroWM's `[keybinds]` and closes itself on the one that opened it.
 - **Favorites** ("Start"): right-click an app to add it; favorites show first as a grid of
   icons, separate from the taskbar's pinned apps. Right-click a favorite to move or remove it.
 - **Three layouts:** a list (icon, name, what it is), a grid of icons with names (like the
