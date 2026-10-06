@@ -397,8 +397,8 @@ fn focused(input: Element<Launcher, Msg>) -> Element<Launcher, Msg> {
 }
 
 /// Opening and closing animations (ms).
-const OPEN_MS: u64 = 280;
-const CLOSE_MS: u64 = 150;
+const OPEN_MS: u64 = 360;
+const CLOSE_MS: u64 = 180;
 
 /// How the panel looks at `r` (0: hidden, 1: open; a little past 1 while
 /// opening settles): a menu zooms out of its bar button's corner, a centered one
@@ -538,7 +538,7 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
                         let (at, frame) = (at.clone(), frame.clone());
                         fapp::add_timeout3(0.0, move |_| {
                             let f = frame.clone();
-                            at.animate_ease(1.0, std::time::Duration::from_millis(OPEN_MS), heroui::anim::snappy, move || f());
+                            at.animate_ease(1.0, std::time::Duration::from_millis(OPEN_MS), heroui::anim::glide, move || f());
                         });
                     }
                     // Child-only updates wait for the full repaint the
