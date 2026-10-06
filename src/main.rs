@@ -404,7 +404,10 @@ const CLOSE_MS: u64 = 150;
 /// opening settles): a menu zooms out of its bar button's corner, a centered one
 /// grows from a bit smaller, rising, as it fades in. (point to scale
 /// around, scale, offset, opacity)
-fn reveal(place: Place, (x, y, w, h): (i32, i32, i32, i32), r: f64) -> ((f64, f64), (f64, f64), (f64, f64), f64) {
+/// (point to scale around, scale, offset, opacity)
+type Look = ((f64, f64), (f64, f64), (f64, f64), f64);
+
+fn reveal(place: Place, (x, y, w, h): (i32, i32, i32, i32), r: f64) -> Look {
     let alpha = (r * 1.4).clamp(0.0, 1.0);
     let cx = x as f64 + w as f64 / 2.0;
     match place {
