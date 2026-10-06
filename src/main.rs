@@ -401,17 +401,20 @@ const OPEN_MS: u64 = 280;
 const CLOSE_MS: u64 = 150;
 
 /// How the panel looks at `r` (0: hidden, 1: open; a little past 1 while
-/// opening settles): a menu unfolds from its bar's edge, a centered one
+/// opening settles): a menu zooms out of its bar button's corner, a centered one
 /// grows from a bit smaller, rising, as it fades in. (point to scale
 /// around, scale, offset, opacity)
 fn reveal(place: Place, (x, y, w, h): (i32, i32, i32, i32), r: f64) -> ((f64, f64), (f64, f64), (f64, f64), f64) {
     let alpha = (r * 1.4).clamp(0.0, 1.0);
     let cx = x as f64 + w as f64 / 2.0;
     match place {
-        // From the bar's edge, never over the bar.
-        Place::Menu { bottom, .. } => {
+        // Zooms out of the corner by its bar button (evenly: squashing
+        // looks less smooth), never over the bar.
+        Place::Menu { bottom, x: bx, .. } => {
             let edge = if bottom { (y + h) as f64 } else { y as f64 };
-            ((cx, edge), (0.97 + 0.03 * r, 0.82 + 0.18 * r), (0.0, 0.0), alpha)
+            let corner = (bx as f64 + 24.0).clamp(x as f64, (x + w) as f64);
+            let s = 0.9 + 0.1 * r;
+            ((corner, edge), (s, s), (0.0, 0.0), alpha)
         }
         Place::Center => {
             let s = 0.9 + 0.1 * r;
