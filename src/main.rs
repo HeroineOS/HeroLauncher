@@ -731,12 +731,6 @@ fn block_close_signal() {
     unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) };
 }
 
-/// For started apps (between fork and exec).
-pub(crate) fn unblock_close_signal() {
-    let set = close_signal_set();
-    unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut()) };
-}
-
 fn toggle_off() -> bool {
     let file = pid_file();
     if let Some(pid) = std::fs::read_to_string(&file).ok().and_then(|s| s.trim().parse::<i32>().ok()) {

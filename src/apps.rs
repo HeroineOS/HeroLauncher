@@ -254,27 +254,14 @@ fn terminal(configured: &str) -> String {
         .to_owned()
 }
 
-/// Starts `app`, detached from the launcher (which exits right after).
+/// Starts `app` on its own (HeroUI's launch: its own session, not our
+/// child, no signals blocked or ignored), so it never depends on the
+/// launcher, which exits right after.
 pub fn launch(app: &App, terminal_cmd: &str) {
     let cmd = if app.terminal { format!("{} -e {}", terminal(terminal_cmd), app.exec) } else { app.exec.clone() };
-    use std::os::unix::process::CommandExt;
-    let mut sh = std::process::Command::new("sh");
-    sh
-        .arg("-c")
-        .arg(format!("exec {cmd}"))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0);
-    // The launcher blocks the signal that closes it (see main.rs); apps
-    // must not inherit that.
-    unsafe {
-        sh.pre_exec(|| {
-            crate::unblock_close_signal();
-            Ok(())
-        });
+    if let Err(e) = heroui::process::launch(&format!("exec {cmd}")) {
+        eprintln!("herolauncher: can't start {cmd}: {e}");
     }
-    let _ = sh.spawn();
 }
 
 #[cfg(test)]
