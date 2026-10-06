@@ -397,13 +397,18 @@ fn focused(input: Element<Launcher, Msg>) -> Element<Launcher, Msg> {
 }
 
 /// Opening and closing animations (ms).
-const OPEN_MS: u64 = 360;
+const OPEN_MS: u64 = 260;
 const CLOSE_MS: u64 = 180;
 
-/// How the panel looks at `r` (0: hidden, 1: open; a little past 1 while
-/// opening settles): a menu zooms out of its bar button's corner, a centered one
-/// grows from a bit smaller, rising, as it fades in. (point to scale
-/// around, scale, offset, opacity)
+/// The opening's curve: quick, and done moving soon (a long soft landing
+/// just creeps the edge by fractions of a pixel for many frames).
+fn opening(t: f64) -> f64 {
+    heroui::anim::cubic_bezier((0.2, 0.9), (0.3, 1.0), t)
+}
+
+/// How the panel looks at `r` (0: hidden, 1: open): a menu zooms out of
+/// its bar button's corner, a centered one grows from a bit smaller,
+/// rising, as it fades in.
 /// (point to scale around, scale, offset, opacity)
 type Look = ((f64, f64), (f64, f64), (f64, f64), f64);
 
@@ -455,6 +460,9 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
         let moving = Rc::new(Cell::new(animated));
         let closing = Rc::new(Cell::new(false));
         let painted = Rc::new(Cell::new((0, 0, 0, 0)));
+        // The opening just ended: its last frame is the picture as is
+        // (the panel unchanged), not a full redraw that could stall it.
+        let landed = Rc::new(Cell::new(false));
         {
             let (rect, child) = (rect.clone(), child.clone());
             g.resize_callback(move |_, x, y, w, h| {
@@ -479,8 +487,8 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
         }
         // Each frame: repaint where the panel was and where it is now.
         let frame = {
-            let (g, rect, at, moving, closing, painted, emit) =
-                (g.clone(), rect.clone(), reveal_at.clone(), moving.clone(), closing.clone(), painted.clone(), emit.clone());
+            let (g, rect, at, moving, closing, painted, landed, emit) =
+                (g.clone(), rect.clone(), reveal_at.clone(), moving.clone(), closing.clone(), painted.clone(), landed.clone(), emit.clone());
             Rc::new(move || {
                 let Some(mut win) = g.window() else { return };
                 let (x, y, w, h) = rect.get();
@@ -491,8 +499,8 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
                 // The last frame of a move is exactly at its end.
                 if closing.get() && at.get() == 0.0 {
                     emit(Msg::Quit);
-                } else if !closing.get() && at.get() == 1.0 {
-                    moving.set(false);
+                } else if !closing.get() && at.get() == 1.0 && moving.replace(false) {
+                    landed.set(true);
                 }
                 win.set_damage_area(Damage::All, dx, dy, dw, dh);
             })
@@ -538,7 +546,7 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
                         let (at, frame) = (at.clone(), frame.clone());
                         fapp::add_timeout3(0.0, move |_| {
                             let f = frame.clone();
-                            at.animate_ease(1.0, std::time::Duration::from_millis(OPEN_MS), heroui::anim::glide, move || f());
+                            at.animate_ease(1.0, std::time::Duration::from_millis(OPEN_MS), opening, move || f());
                         });
                     }
                     // Child-only updates wait for the full repaint the
@@ -557,6 +565,11 @@ fn overlay(panel: Element<Launcher, Msg>, place: Place, size: (i32, i32)) -> Ele
                         snap.paint(o, s, d, a);
                         return;
                     }
+                }
+                if landed.replace(false) && snap.is_recorded() && !stale.replace(false) && g.damage_type() != Damage::Child {
+                    snap.paint((x as f64, y as f64), (1.0, 1.0), (0.0, 0.0), 1.0);
+                    snap.clear();
+                    return;
                 }
                 snap.clear();
                 // Only on full redraws: when just a child changed, it
