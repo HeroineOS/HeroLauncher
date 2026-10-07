@@ -676,13 +676,23 @@ fn menu_view() -> Element<Launcher, Msg> {
     .padding(6)
 }
 
+const HELP: &str = "Usage: herolauncher [--menu --edge top|bottom --x X --offset N]
+
+Opens the launcher in the middle of the screen, or (--menu) as a menu at a
+panel button: its left edge at X, N px from the top or bottom edge. Run it
+again (or press the shortcut that opened it) to close it.
+
+  --menu                  open as a menu at a panel button
+  --edge top|bottom       the panel's screen edge (with --menu)
+  --x X                   the button's left edge (with --menu)
+  --offset N              distance from that edge, px (with --menu)
+  --print-default-config  print the commented default config
+                          (~/.config/hero/launcher.toml)
+  --version               print the version
+  --help                  print this";
+
 fn usage() -> ! {
-    eprintln!(
-        "usage: herolauncher [--menu --edge top|bottom --x X --offset N]\n\
-         \n  Opens the launcher in the middle of the screen, or (--menu) as a menu at a\n  \
-         panel button: its left edge at X, N px from the top or bottom edge.\n  \
-         Run it again to close it."
-    );
+    eprintln!("{HELP}");
     std::process::exit(2)
 }
 
@@ -705,6 +715,14 @@ fn parse_args() -> Place {
             },
             "--print-default-config" => {
                 print!("{}", config::DEFAULT);
+                std::process::exit(0)
+            }
+            "--version" | "-V" => {
+                println!("herolauncher {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0)
+            }
+            "--help" | "-h" => {
+                println!("herolauncher {} - the HeroineOS app launcher\n\n{HELP}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0)
             }
             _ => usage(),
